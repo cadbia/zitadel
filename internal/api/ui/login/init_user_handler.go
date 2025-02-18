@@ -68,12 +68,27 @@ func InitUserLinkTemplate(origin, userID, orgID, authRequestID string) string {
 }
 
 func (l *Login) handleInitUser(w http.ResponseWriter, r *http.Request) {
-	authReq := l.checkOptionalAuthRequestOfEmailLinks(r)
-	userID := r.FormValue(queryInitUserUserID)
-	code := r.FormValue(queryInitUserCode)
-	loginName := r.FormValue(queryInitUserLoginName)
-	passwordSet, _ := strconv.ParseBool(r.FormValue(queryInitUserPassword))
-	l.renderInitUser(w, r, authReq, userID, loginName, code, passwordSet, nil)
+    // Extract the "lang" query parameter from the activation link.
+    lang := r.URL.Query().Get("lang")
+    if lang != "" {
+        // Set a cookie with the preferred language.
+        // Here, we use "language" as the cookie name.
+        cookie := &http.Cookie{
+            Name:     "zitadel.login.lang",
+            Value:    lang,
+            Path:     "/",
+            HttpOnly: false, // Accessible to client-side code if needed.
+            // Optionally, add other cookie options like Secure, Expires, etc.
+        }
+        http.SetCookie(w, cookie)
+    }
+
+    authReq := l.checkOptionalAuthRequestOfEmailLinks(r)
+    userID := r.FormValue(queryInitUserUserID)
+    code := r.FormValue(queryInitUserCode)
+    loginName := r.FormValue(queryInitUserLoginName)
+    passwordSet, _ := strconv.ParseBool(r.FormValue(queryInitUserPassword))
+    l.renderInitUser(w, r, authReq, userID, loginName, code, passwordSet, nil)
 }
 
 func (l *Login) handleInitUserCheck(w http.ResponseWriter, r *http.Request) {
@@ -130,47 +145,27 @@ func (l *Login) resendUserInit(w http.ResponseWriter, r *http.Request, authReq *
 	l.renderInitUser(w, r, authReq, userID, loginName, "", showPassword, err)
 }
 
-func (l *Login) renderInitUser(w http.ResponseWriter, r *http.Request, authReq *domain.AuthRequest, userID, loginName string, code string, passwordSet bool, err error) {
-	if authReq != nil {
-		userID = authReq.UserID
-	}
-
-	translator := l.getTranslator(r.Context(), authReq)
-	data := initUserData{
-		baseData:    l.getBaseData(r, authReq, translator, "InitUser.Title", "InitUser.Description", err),
-		profileData: l.getProfileData(authReq),
-		UserID:      userID,
-		Code:        code,
-		PasswordSet: passwordSet,
-	}
-	// if the user clicked on the link in the mail, we need to make sure the loginName is rendered
-	if authReq == nil {
-		data.LoginName = loginName
-		data.UserName = loginName
-	}
-	policy := l.getPasswordComplexityPolicyByUserID(r, userID)
-	if policy != nil {
-		data.MinLength = policy.MinLength
-		if policy.HasUppercase {
-			data.HasUppercase = UpperCaseRegex
-		}
-		if policy.HasLowercase {
-			data.HasLowercase = LowerCaseRegex
-		}
-		if policy.HasSymbol {
-			data.HasSymbol = SymbolRegex
-		}
-		if policy.HasNumber {
-			data.HasNumber = NumberRegex
-		}
-	}
-	if authReq == nil {
-		user, err := l.query.GetUserByID(r.Context(), false, userID)
-		if err == nil {
-			l.customTexts(r.Context(), translator, user.ResourceOwner)
-		}
-	}
-	l.renderer.RenderTemplate(w, r, translator, l.renderer.Templates[tmplInitUser], data, nil)
+func (l *Login) renderInitUser(w http.ResponseWriter, r *http.Request, authReq *domain.AuthRequest, userID, loginName, code string, passwordSet bool, err error) {
+    // Get translator from the context. This will pick up the language from the cookie.
+    translator := l.getTranslator(r.Context(), authReq)
+    
+    // Now use the translator to get localized text.
+    title := translator.LocalizeFromRequest(r, "InitUser.Title", nil)
+    description := translator.LocalizeFromRequest(r, "InitUser.Description", nil)
+    
+    data := initUserData{
+        baseData:    l.getBaseData(r, authReq, translator, title, description, err),
+        profileData: l.getProfileData(authReq),
+        UserID:      userID,
+        Code:        code,
+        PasswordSet: passwordSet,
+    }
+    if authReq == nil {
+        data.LoginName = loginName
+        data.UserName = loginName
+    }
+    
+    l.renderer.RenderTemplate(w, r, translator, l.renderer.Templates[tmplInitUser], data, nil)
 }
 
 func (l *Login) renderInitUserDone(w http.ResponseWriter, r *http.Request, authReq *domain.AuthRequest, orgID string) {

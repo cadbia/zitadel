@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	http_util "github.com/zitadel/zitadel/internal/api/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/zitadel/zitadel/internal/repository/session"
 	"github.com/zitadel/zitadel/internal/repository/user"
 	"github.com/zitadel/zitadel/internal/zerrors"
+	"golang.org/x/text/language"
 )
 
 func init() {
@@ -215,6 +217,27 @@ func (u *userNotifier) reduceInitCodeAdded(event eventstore.Event) (*handler.Sta
 			return err
 		}
 		origin := http_util.DomainContext(ctx).Origin()
+
+		// Generate the initial activation link.
+		link := login.InitUserLinkTemplate(origin, e.Aggregate().ID, e.Aggregate().ResourceOwner, e.AuthRequestID)
+
+		// Retrieve the user's notification record using GetNotifyUserByID.
+		notifyUser, err := u.queries.GetNotifyUserByID(ctx, false, e.Aggregate().ID)
+		if err != nil {
+			return err
+		}
+
+		// Append the preferred language from the user's notification record if available.
+		if notifyUser.PreferredLanguage != language.Und {
+			// Convert the language.Tag to a string using .String()
+			langStr := notifyUser.PreferredLanguage.String()
+			if strings.Contains(link, "?") {
+				link = link + "&lang=" + langStr
+			} else {
+				link = link + "?lang=" + langStr
+			}
+		}
+
 		return u.commands.RequestNotification(
 			ctx,
 			e.Aggregate().ResourceOwner,
@@ -226,7 +249,7 @@ func (u *userNotifier) reduceInitCodeAdded(event eventstore.Event) (*handler.Sta
 				domain.NotificationTypeEmail,
 				domain.InitCodeMessageType,
 			).
-				WithURLTemplate(login.InitUserLinkTemplate(origin, e.Aggregate().ID, e.Aggregate().ResourceOwner, e.AuthRequestID)).
+				WithURLTemplate(link).
 				WithCode(e.Code, e.Expiry).
 				WithArgs(&domain.NotificationArguments{
 					AuthRequestID: e.AuthRequestID,
